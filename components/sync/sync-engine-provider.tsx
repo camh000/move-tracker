@@ -60,20 +60,34 @@ export function SyncEngineProvider({ children }: { children: React.ReactNode }) 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     let canceled = false;
+    let primedForUser: string | null = null;
 
-    // Prime IndexedDB from server on initial mount if user is signed in
-    (async () => {
-      const supabase = createClient();
-      const { data } = await supabase.auth.getUser();
-      if (data.user && !canceled) {
-        try {
-          await primeFromServer();
-        } catch {
-          // continue — initial pull not critical
-        }
-        await tick();
+    const primeAndSync = async (userId: string) => {
+      if (canceled || primedForUser === userId) return;
+      primedForUser = userId;
+      try {
+        await primeFromServer();
+      } catch {
+        // continue — initial pull not critical
       }
-    })();
+      if (!canceled) await tick();
+    };
+
+    const supabase = createClient();
+
+    // Prime IndexedDB from server on initial mount if user is already signed in
+    void supabase.auth.getUser().then(({ data }) => {
+      if (data.user) void primeAndSync(data.user.id);
+    });
+
+    // React to sign-in / sign-out happening after mount
+    const { data: authSub } = supabase.auth.onAuthStateChange((event, session) => {
+      if ((event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") && session?.user) {
+        void primeAndSync(session.user.id);
+      } else if (event === "SIGNED_OUT") {
+        primedForUser = null;
+      }
+    });
 
     const onOnline = () => {
       setOnline(true);
@@ -103,6 +117,7 @@ export function SyncEngineProvider({ children }: { children: React.ReactNode }) 
 
     return () => {
       canceled = true;
+      authSub.subscription.unsubscribe();
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("focus", onFocus);
