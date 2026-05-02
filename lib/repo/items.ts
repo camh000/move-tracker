@@ -108,6 +108,19 @@ export async function updateItem(id: string, patch: Partial<Pick<ItemRow, "name"
 }
 
 export async function deleteItem(id: string) {
+  // Cascade locally to photos: the server FK cascade only removes DB rows,
+  // not Storage objects, and deletes never appear in delta-pull.
+  const photos = await db().item_photos.where("item_id").equals(id).toArray();
+  for (const photo of photos) {
+    if (photo._deleted === 1) continue;
+    await db().item_photos.update(photo.id, { _deleted: 1, _dirty: 1 });
+    await enqueue({
+      table: "item_photos",
+      op: "delete",
+      row_id: photo.id,
+      payload: { id: photo.id, storage_path: photo.storage_path },
+    });
+  }
   await db().items.update(id, { _deleted: 1, _dirty: 1 });
   await enqueue({ table: "items", op: "delete", row_id: id, payload: { id } });
 }

@@ -2,7 +2,9 @@ import { db, type BoxRow, type ItemRow, type ItemPhotoRow, type RoomRow, type Ou
 import { createClient } from "@/lib/supabase/client";
 
 const META_LAST_SYNC = "last_sync_at";
+const META_LAST_RECONCILE = "last_reconcile_at";
 const STORAGE_BUCKET = "item-photos";
+const RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 
 interface SyncResult {
   pending: number;
@@ -18,14 +20,85 @@ export async function runSync(): Promise<SyncResult> {
     try {
       const drained = await drainOutbox();
       const pulled = await deltaPull();
+      const reconciled = await maybeReconcile();
       const pending = await db().outbox.count();
       const lastSyncAt = ((await db().meta.get(META_LAST_SYNC))?.value as number | undefined) ?? null;
-      return { pending, lastSyncAt, changed: drained || pulled };
+      return { pending, lastSyncAt, changed: drained || pulled || reconciled };
     } finally {
       inFlight = null;
     }
   })();
   return inFlight;
+}
+
+async function maybeReconcile(): Promise<boolean> {
+  const last = ((await db().meta.get(META_LAST_RECONCILE))?.value as number | undefined) ?? 0;
+  if (Date.now() - last < RECONCILE_INTERVAL_MS) return false;
+  return reconcileWithServer();
+}
+
+export async function reconcileWithServer(): Promise<boolean> {
+  const supabase = createClient();
+  const [boxesRes, itemsRes, photosRes, roomsRes] = await Promise.all([
+    supabase.from("boxes").select("id"),
+    supabase.from("items").select("id"),
+    supabase.from("item_photos").select("id"),
+    supabase.from("rooms").select("id"),
+  ]);
+
+  if (boxesRes.error) throw boxesRes.error;
+  if (itemsRes.error) throw itemsRes.error;
+  if (photosRes.error) throw photosRes.error;
+  if (roomsRes.error) throw roomsRes.error;
+
+  const serverBoxes = new Set((boxesRes.data ?? []).map((r) => r.id as string));
+  const serverItems = new Set((itemsRes.data ?? []).map((r) => r.id as string));
+  const serverPhotos = new Set((photosRes.data ?? []).map((r) => r.id as string));
+  const serverRooms = new Set((roomsRes.data ?? []).map((r) => r.id as string));
+
+  let removed = 0;
+
+  await db().transaction(
+    "rw",
+    [db().boxes, db().items, db().item_photos, db().rooms, db().meta],
+    async () => {
+      const localBoxes = await db().boxes.toArray();
+      for (const row of localBoxes) {
+        if (row._dirty === 1) continue;
+        if (!serverBoxes.has(row.id)) {
+          await db().boxes.delete(row.id);
+          removed++;
+        }
+      }
+      const localItems = await db().items.toArray();
+      for (const row of localItems) {
+        if (row._dirty === 1) continue;
+        if (!serverItems.has(row.id)) {
+          await db().items.delete(row.id);
+          removed++;
+        }
+      }
+      const localPhotos = await db().item_photos.toArray();
+      for (const row of localPhotos) {
+        if (row._dirty === 1) continue;
+        if (!serverPhotos.has(row.id)) {
+          await db().item_photos.delete(row.id);
+          removed++;
+        }
+      }
+      const localRooms = await db().rooms.toArray();
+      for (const row of localRooms) {
+        if (row._dirty === 1) continue;
+        if (!serverRooms.has(row.id)) {
+          await db().rooms.delete(row.id);
+          removed++;
+        }
+      }
+      await db().meta.put({ key: META_LAST_RECONCILE, value: Date.now() });
+    },
+  );
+
+  return removed > 0;
 }
 
 export async function primeFromServer(): Promise<void> {

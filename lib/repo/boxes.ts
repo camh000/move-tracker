@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { db, type BoxRow } from "@/lib/db/dexie";
 import { enqueue } from "@/lib/db/sync";
+import { deleteItem } from "@/lib/repo/items";
 
 export interface BoxWithItemCount extends BoxRow {
   itemCount: number;
@@ -91,6 +92,13 @@ export async function updateBox(id: string, patch: Partial<Pick<BoxRow, "destina
 }
 
 export async function deleteBox(id: string) {
+  // Cascade locally through items → photos so Storage objects are queued for
+  // removal and orphan rows don't linger in IndexedDB.
+  const items = await db().items.where("box_id").equals(id).toArray();
+  for (const item of items) {
+    if (item._deleted === 1) continue;
+    await deleteItem(item.id);
+  }
   await db().boxes.update(id, { _deleted: 1, _dirty: 1 });
   await enqueue({ table: "boxes", op: "delete", row_id: id, payload: { id } });
 }

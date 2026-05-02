@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, Trash2, Plus, RefreshCw, ChevronDown } from "lucide-react";
+import { Loader2, LogOut, Trash2, Plus, RefreshCw, ChevronDown, Sparkles, Info } from "lucide-react";
 import { toast } from "sonner";
 import { listRooms, addRoom, deleteRoom } from "@/lib/repo/rooms";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { db } from "@/lib/db/dexie";
 import { createClient } from "@/lib/supabase/client";
+import { runCleanup, type CleanupResult } from "@/lib/db/cleanup";
 import { useSyncEngine } from "@/components/sync/sync-engine-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import {
@@ -33,23 +34,32 @@ export function SettingsView() {
   const [newRoom, setNewRoom] = React.useState("");
   const [adding, setAdding] = React.useState(false);
   const [photoCount, setPhotoCount] = React.useState<number | null>(null);
+  const [localPhotoSize, setLocalPhotoSize] = React.useState<string | null>(null);
   const [storageEstimate, setStorageEstimate] = React.useState<string | null>(null);
   const [deleteId, setDeleteId] = React.useState<string | null>(null);
   const [forcing, setForcing] = React.useState(false);
   const [showHowSync, setShowHowSync] = React.useState(false);
+  const [cleaning, setCleaning] = React.useState(false);
+  const [cleanupResult, setCleanupResult] = React.useState<CleanupResult | null>(null);
+
+  const refreshStorageStats = React.useCallback(async () => {
+    const photos = await db().item_photos.toArray();
+    const live = photos.filter((p) => p._deleted !== 1);
+    setPhotoCount(live.length);
+    const localBytes = live.reduce(
+      (acc, p) => acc + (p._local_blob ? p._local_blob.size : 0),
+      0,
+    );
+    setLocalPhotoSize(localBytes > 0 ? formatBytes(localBytes) : "0 B");
+    if (typeof navigator !== "undefined" && "storage" in navigator && navigator.storage.estimate) {
+      const est = await navigator.storage.estimate();
+      if (est.usage) setStorageEstimate(formatBytes(est.usage));
+    }
+  }, []);
 
   React.useEffect(() => {
-    void (async () => {
-      const count = await db().item_photos.count();
-      setPhotoCount(count);
-      if (typeof navigator !== "undefined" && "storage" in navigator && navigator.storage.estimate) {
-        const est = await navigator.storage.estimate();
-        if (est.usage) {
-          setStorageEstimate(formatBytes(est.usage));
-        }
-      }
-    })();
-  }, []);
+    void refreshStorageStats();
+  }, [refreshStorageStats, status.lastSyncAt]);
 
   const handleAddRoom = async () => {
     if (!newRoom.trim()) return;
@@ -175,8 +185,51 @@ export function SettingsView() {
       <Section title="Storage">
         <div className="rounded-xl border bg-card p-4 text-sm">
           <Row label="Photos" value={photoCount?.toString() ?? "—"} />
-          <Row label="Approx. used" value={storageEstimate ?? "—"} />
+          <Row label="Photos waiting to upload" value={localPhotoSize ?? "—"} />
+          <Row
+            label="App + data on device"
+            value={storageEstimate ?? "—"}
+            hint="Includes the Move Tracker app itself plus your local copy of the inventory and any pending photos."
+          />
         </div>
+
+        <Button
+          className="mt-3 w-full"
+          variant="outline"
+          onClick={async () => {
+            setCleaning(true);
+            setCleanupResult(null);
+            try {
+              const result = await runCleanup();
+              setCleanupResult(result);
+              await refreshStorageStats();
+              queryClient.invalidateQueries();
+              const total = result.localPhotos + result.localItems + result.localBoxes + result.storageObjects;
+              if (total === 0) {
+                toast.success("Nothing to clean up");
+              } else {
+                toast.success(
+                  `Cleaned ${result.localPhotos} photos, ${result.localItems} items, ${result.localBoxes} boxes, ${result.storageObjects} files`,
+                );
+              }
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Cleanup failed");
+            } finally {
+              setCleaning(false);
+            }
+          }}
+          disabled={cleaning}
+        >
+          {cleaning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          Clean up orphaned data
+        </Button>
+        {cleanupResult && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Last cleanup: {cleanupResult.localPhotos + cleanupResult.localItems + cleanupResult.localBoxes} local
+            row{cleanupResult.localPhotos + cleanupResult.localItems + cleanupResult.localBoxes === 1 ? "" : "s"} ·{" "}
+            {cleanupResult.storageObjects} Storage file{cleanupResult.storageObjects === 1 ? "" : "s"}
+          </p>
+        )}
       </Section>
 
       <Section title="Account actions">
@@ -215,10 +268,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="flex items-baseline justify-between border-b py-2 last:border-b-0 last:pb-0 first:pt-0">
-      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-1 text-muted-foreground" title={hint}>
+        {label}
+        {hint && <Info className="h-3 w-3 opacity-60" aria-hidden="true" />}
+      </span>
       <span className="font-medium">{value}</span>
     </div>
   );
