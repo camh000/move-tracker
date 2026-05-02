@@ -48,6 +48,8 @@ yarn-error.log*
 /login.png
 /page-*.png
 /page-*.yml
+/smoke-*.png
+/prod-*.png
 
 # typescript
 *.tsbuildinfo
