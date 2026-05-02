@@ -67,6 +67,10 @@ export function SyncEngineProvider({ children }: { children: React.ReactNode }) 
       primedForUser = userId;
       try {
         await primeFromServer();
+        // Prime populates Dexie but tick() sees nothing newer than the
+        // freshly stamped last_sync_at, so it won't invalidate queries.
+        // Invalidate explicitly here so room/box lists pick up the seed.
+        await queryClient.invalidateQueries();
       } catch {
         // continue — initial pull not critical
       }
