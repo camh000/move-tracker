@@ -95,3 +95,14 @@ export function db(): MoveTrackerDB {
   if (!_db) _db = new MoveTrackerDB();
   return _db;
 }
+
+export function __resetDbForTests() {
+  if (_db) {
+    try {
+      _db.close();
+    } catch {
+      // ignore
+    }
+  }
+  _db = null;
+}

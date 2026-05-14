@@ -186,27 +186,29 @@ async function deltaPull(): Promise<boolean> {
   return changed;
 }
 
-async function drainOutbox(): Promise<boolean> {
+export async function drainOutbox(): Promise<boolean> {
   const supabase = createClient();
   const entries = await db().outbox.orderBy("seq").toArray();
   if (!entries.length) return false;
 
   let processed = 0;
+  const blockedKeys = new Set<string>();
   for (const entry of entries) {
+    const key = `${entry.table}:${entry.row_id}`;
+    if (blockedKeys.has(key)) continue;
     try {
       await processEntry(entry, supabase);
       if (entry.seq != null) await db().outbox.delete(entry.seq);
       processed++;
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unknown sync error";
+      const message = extractErrorMessage(err);
       if (entry.seq != null) {
         await db().outbox.update(entry.seq, {
           attempts: entry.attempts + 1,
           last_error: message,
         });
       }
-      // Stop draining on first failure to preserve order
-      throw err;
+      blockedKeys.add(key);
     }
   }
   return processed > 0;
@@ -345,6 +347,15 @@ async function processEntry(
       await db().rooms.delete(row_id);
     }
   }
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const m = (err as { message: unknown }).message;
+    if (typeof m === "string" && m.length > 0) return m;
+  }
+  return "Unknown sync error";
 }
 
 export async function enqueue(entry: Omit<OutboxEntry, "seq" | "attempts" | "created_at">) {
