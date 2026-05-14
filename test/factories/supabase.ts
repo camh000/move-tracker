@@ -211,6 +211,14 @@ class StorageBucket {
     for (const p of paths) this.state.storage.uploaded.delete(p);
     return { data: paths.map((p) => ({ name: p })), error: null };
   }
+
+  async createSignedUrl(path: string, ttl: number) {
+    void this.bucket;
+    return {
+      data: { signedUrl: `https://mock.supabase/signed/${encodeURIComponent(path)}?ttl=${ttl}` },
+      error: null,
+    };
+  }
 }
 
 export interface MockSupabaseClient {

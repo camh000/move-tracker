@@ -35,10 +35,19 @@ state.failures.push({
 
 ## What's *not* tested here
 
-- **Server components** (`app/(app)/**/page.tsx`): no public RSC testing API. Cover via Playwright (week 3).
-- **`proxy.ts` middleware**: Node-runtime-bound and tightly coupled to Next internals. Cover via Playwright.
-- **Service worker** (`app/sw.ts`): disabled when `NODE_ENV === 'test'` via `next.config.mjs`. Real SW behavior is covered by Playwright.
-- **`app/api/cleanup-storage/route.ts`**: uses service role; cover via Playwright against the local Supabase stack.
+- **Server components** (`app/(app)/**/page.tsx`): no public RSC testing API. Defer to Playwright.
+- **`proxy.ts` middleware**: Node-runtime-bound and tightly coupled to Next internals. Defer to Playwright.
+- **Service worker** (`app/sw.ts`): disabled when `NODE_ENV === 'test'` via `next.config.mjs`. Real SW behaviour needs Playwright.
+- **`app/api/cleanup-storage/route.ts`**: uses service role; defer to Playwright against a real Supabase stack.
+
+## End-to-end (parked)
+
+Playwright + local Supabase is the intended next layer per the plan in `/root/.claude/plans/full-plan-please-ultrathink-validated-brook.md`. Setting it up needs:
+
+- Docker (for `supabase start`) on the developer machine *and* in CI, OR
+- A hosted Supabase project dedicated to tests, with the URL/keys provided via `.env.test.local`.
+
+Not added yet because the sandbox these tests were authored in lacks Docker and Playwright's Chromium download was network-blocked. Add when the development environment supports it.
 
 ## Known limitations
 

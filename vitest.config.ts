@@ -13,6 +13,6 @@ export default defineConfig({
     globals: false,
     environment: "jsdom",
     setupFiles: ["./test/setup/sync.ts"],
-    include: ["lib/**/*.test.ts", "components/**/*.test.{ts,tsx}"],
+    include: ["lib/**/*.test.{ts,tsx}", "components/**/*.test.{ts,tsx}", "hooks/**/*.test.{ts,tsx}"],
   },
 });
