@@ -49,6 +49,7 @@ export async function createItem(input: CreateItemInput, userId: string | null):
     box_id: input.box_id,
     name: input.name.trim(),
     description: input.description?.trim() || null,
+    unpacked: false,
     created_by: userId,
     created_at: now,
     updated_at: now,
@@ -81,30 +82,26 @@ export async function createItem(input: CreateItemInput, userId: string | null):
   return row;
 }
 
-export async function updateItem(id: string, patch: Partial<Pick<ItemRow, "name" | "description" | "box_id">>) {
+export type ItemPatch = Partial<Pick<ItemRow, "name" | "description" | "box_id" | "unpacked">>;
+
+export async function updateItem(id: string, patch: ItemPatch) {
   const existing = await db().items.get(id);
   if (!existing) return;
-  const now = new Date().toISOString();
-  const next: ItemRow = {
-    ...existing,
-    name: patch.name !== undefined ? patch.name.trim() : existing.name,
-    description: patch.description !== undefined ? (patch.description?.toString().trim() || null) : existing.description,
-    box_id: patch.box_id ?? existing.box_id,
-    updated_at: now,
-    _dirty: 1,
-  };
-  await db().items.put(next);
-  await enqueue({
-    table: "items",
-    op: "update",
-    row_id: id,
-    payload: {
-      name: next.name,
-      description: next.description,
-      box_id: next.box_id,
-      updated_at: next.updated_at,
-    },
-  });
+  const clean: ItemPatch = { ...patch };
+  if (patch.name !== undefined) clean.name = patch.name.trim();
+  if (patch.description !== undefined) clean.description = patch.description?.toString().trim() || null;
+
+  await db().items.put({ ...existing, ...clean, updated_at: new Date().toISOString(), _dirty: 1 });
+  // Only the changed fields go up (see updateBox).
+  await enqueue({ table: "items", op: "update", row_id: id, payload: clean });
+}
+
+export async function moveItem(id: string, toBoxId: string) {
+  await updateItem(id, { box_id: toBoxId });
+}
+
+export async function setItemUnpacked(id: string, unpacked: boolean) {
+  await updateItem(id, { unpacked });
 }
 
 export async function deleteItem(id: string) {

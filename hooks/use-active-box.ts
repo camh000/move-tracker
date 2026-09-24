@@ -35,6 +35,8 @@ export function useActiveBox() {
   const [state, setState] = React.useState<ActiveBoxState | null>(null);
 
   React.useEffect(() => {
+    // localStorage is only readable after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState(read());
     const onChange = () => setState(read());
     window.addEventListener("active-box-changed", onChange);

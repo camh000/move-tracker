@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import withSerwistInit from "@serwist/next";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -53,11 +54,31 @@ const nextConfig = {
   },
 };
 
+// Every app screen is a static shell; precache them all so any screen opens
+// offline, even one never visited on this device. Revision changes per build
+// so a new deploy refreshes them.
+const buildRevision = process.env.VERCEL_GIT_COMMIT_SHA || randomUUID();
+const appShellRoutes = [
+  "/",
+  "/login",
+  "/box",
+  "/box/new",
+  "/box/add-item",
+  "/item",
+  "/search",
+  "/arrival",
+  "/labels",
+  "/settings",
+];
+
 const withSerwist = withSerwistInit({
   swSrc: "app/sw.ts",
   swDest: "public/sw.js",
   cacheOnNavigation: true,
-  reloadOnOnline: true,
+  // Reloading on reconnect would wipe a half-filled add-item form (photo and
+  // all). The sync engine already picks up the reconnect by itself.
+  reloadOnOnline: false,
+  additionalPrecacheEntries: appShellRoutes.map((url) => ({ url, revision: buildRevision })),
   disable: process.env.NODE_ENV === "development",
 });
 

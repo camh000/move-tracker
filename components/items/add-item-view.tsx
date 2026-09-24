@@ -15,6 +15,7 @@ import { getBox } from "@/lib/repo/boxes";
 import { createItem } from "@/lib/repo/items";
 import { compressImage } from "@/lib/utils/image-compression";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { boxHref } from "@/lib/routes";
 
 interface PendingPhoto {
   id: string;
@@ -26,7 +27,7 @@ export function AddItemView({ boxId }: { boxId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user } = useCurrentUser();
-  const { data: box } = useQuery({ queryKey: ["box", boxId], queryFn: () => getBox(boxId) });
+  const { data: box } = useQuery({ queryKey: ["box", boxId], queryFn: async () => (await getBox(boxId)) ?? null });
 
   const cameraRef = React.useRef<HTMLInputElement>(null);
   const nameRef = React.useRef<HTMLInputElement>(null);
@@ -107,7 +108,7 @@ export function AddItemView({ boxId }: { boxId: string }) {
       toast.success(`Added "${trimmed}"`);
 
       if (mode === "close") {
-        router.replace(`/box/${boxId}`);
+        router.replace(boxHref(boxId));
       } else {
         // Reset state for next item
         photos.forEach((p) => URL.revokeObjectURL(p.preview));
@@ -131,7 +132,7 @@ export function AddItemView({ boxId }: { boxId: string }) {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         {box && (
-          <Link href={`/box/${box.id}`} className="text-sm text-muted-foreground">
+          <Link href={boxHref(box.id)} className="text-sm text-muted-foreground">
             Box <span className="font-bold tabular-nums text-foreground">{box.number}</span> · {box.destination_room}
           </Link>
         )}

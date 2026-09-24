@@ -28,6 +28,15 @@ export default function LoginPage() {
     formState: { errors },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
+  // Already signed in (e.g. opened /login from a bookmark) → go home.
+  React.useEffect(() => {
+    void createClient()
+      .auth.getSession()
+      .then(({ data }) => {
+        if (data.session) router.replace("/");
+      });
+  }, [router]);
+
   const onSubmit = async (values: FormValues) => {
     setSubmitting(true);
     setError(null);

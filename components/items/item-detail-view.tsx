@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MoreVertical, Trash2, Plus, Loader2, Camera } from "lucide-react";
+import { ArrowLeft, MoreVertical, Trash2, Plus, Loader2, Camera, ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,9 +26,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ItemPhoto } from "@/components/items/item-photo";
-import { getItem, updateItem, deleteItem, addPhotoToItem, deletePhoto } from "@/lib/repo/items";
+import { getItem, updateItem, deleteItem, addPhotoToItem, deletePhoto, moveItem, setItemUnpacked } from "@/lib/repo/items";
 import { getBox } from "@/lib/repo/boxes";
 import { compressImage } from "@/lib/utils/image-compression";
+import { Switch } from "@/components/ui/switch";
+import { MoveItemDialog } from "@/components/items/move-item-dialog";
+import { boxHref } from "@/lib/routes";
 
 export function ItemDetailView({ id }: { id: string }) {
   const router = useRouter();
@@ -37,12 +40,12 @@ export function ItemDetailView({ id }: { id: string }) {
 
   const { data: item, isLoading } = useQuery({
     queryKey: ["item", id],
-    queryFn: () => getItem(id),
+    queryFn: async () => (await getItem(id)) ?? null,
   });
   const { data: box } = useQuery({
     enabled: !!item,
     queryKey: ["box", item?.box_id],
-    queryFn: () => (item ? getBox(item.box_id) : null),
+    queryFn: async () => (item ? ((await getBox(item.box_id)) ?? null) : null),
   });
 
   const [name, setName] = React.useState("");
@@ -50,9 +53,14 @@ export function ItemDetailView({ id }: { id: string }) {
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [confirmDeletePhotoId, setConfirmDeletePhotoId] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState(false);
+  const [moving, setMoving] = React.useState(false);
+  const loadedFor = React.useRef<string | null>(null);
 
+  // Fill the form once per item — not on every background sync, which would
+  // wipe out an edit in progress.
   React.useEffect(() => {
-    if (item) {
+    if (item && loadedFor.current !== item.id) {
+      loadedFor.current = item.id;
       setName(item.name);
       setDescription(item.description ?? "");
     }
@@ -95,7 +103,25 @@ export function ItemDetailView({ id }: { id: string }) {
     queryClient.invalidateQueries({ queryKey: ["items", item.box_id] });
     queryClient.invalidateQueries({ queryKey: ["boxes"] });
     toast.success("Item deleted");
-    router.replace(`/box/${item.box_id}`);
+    router.replace(boxHref(item.box_id));
+  };
+
+  const onMove = async (toBoxId: string, toNumber: number) => {
+    const fromBoxId = item.box_id;
+    await moveItem(item.id, toBoxId);
+    setMoving(false);
+    queryClient.invalidateQueries({ queryKey: ["item", id] });
+    queryClient.invalidateQueries({ queryKey: ["items", fromBoxId] });
+    queryClient.invalidateQueries({ queryKey: ["items", toBoxId] });
+    queryClient.invalidateQueries({ queryKey: ["boxes"] });
+    toast.success(`Moved to box ${toNumber}`);
+  };
+
+  const onToggleUnpacked = async (unpacked: boolean) => {
+    await setItemUnpacked(item.id, unpacked);
+    queryClient.invalidateQueries({ queryKey: ["item", id] });
+    queryClient.invalidateQueries({ queryKey: ["items", item.box_id] });
+    queryClient.invalidateQueries({ queryKey: ["boxes"] });
   };
 
   const onAddPhoto = async (file: File | undefined) => {
@@ -122,7 +148,7 @@ export function ItemDetailView({ id }: { id: string }) {
   return (
     <div className="mx-auto max-w-md px-4 pt-4 pb-8">
       <div className="mb-2 flex items-center justify-between">
-        <Button variant="ghost" size="icon" onClick={() => router.back()}>
+        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Back">
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <DropdownMenu>
@@ -132,6 +158,10 @@ export function ItemDetailView({ id }: { id: string }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setMoving(true)}>
+              <ArrowRightLeft className="h-4 w-4" />
+              Move to another box
+            </DropdownMenuItem>
             <DropdownMenuItem destructive onClick={() => setConfirmDelete(true)}>
               <Trash2 className="h-4 w-4" />
               Delete item
@@ -141,12 +171,15 @@ export function ItemDetailView({ id }: { id: string }) {
       </div>
 
       {box && (
-        <Link
-          href={`/box/${box.id}`}
-          className="mb-4 inline-block text-sm text-muted-foreground hover:text-foreground"
-        >
-          Box <span className="font-bold tabular-nums text-foreground">{box.number}</span> · {box.destination_room}
-        </Link>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <Link href={boxHref(box.id)} className="text-sm text-muted-foreground hover:text-foreground">
+            Box <span className="font-bold tabular-nums text-foreground">{box.number}</span> · {box.destination_room}
+          </Link>
+          <Button variant="outline" size="sm" onClick={() => setMoving(true)}>
+            <ArrowRightLeft className="h-4 w-4" />
+            Move
+          </Button>
+        </div>
       )}
 
       <input
@@ -209,7 +242,17 @@ export function ItemDetailView({ id }: { id: string }) {
         <Button size="lg" onClick={onSave}>
           Save changes
         </Button>
+
+        <div className="flex items-center justify-between rounded-xl border p-4">
+          <div>
+            <div className="text-sm font-medium">Unpacked</div>
+            <div className="text-xs text-muted-foreground">Out of the box and put away.</div>
+          </div>
+          <Switch checked={!!item.unpacked} onCheckedChange={onToggleUnpacked} aria-label="Unpacked" />
+        </div>
       </div>
+
+      <MoveItemDialog open={moving} onOpenChange={setMoving} currentBoxId={item.box_id} onPick={onMove} />
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

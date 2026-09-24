@@ -9,13 +9,14 @@ import { Loader2, Package } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RoomSelect } from "@/components/boxes/room-select";
 import { createBox, nextBoxNumber } from "@/lib/repo/boxes";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useActiveBox } from "@/hooks/use-active-box";
+import { BoxTagToggles, type BoxTagKey } from "@/components/boxes/box-tags";
+import { boxHref } from "@/lib/routes";
 
 const schema = z.object({
   destination_room: z.string().min(1, "Pick a room"),
@@ -31,6 +32,7 @@ export default function NewBoxPage() {
   const { setActiveBox } = useActiveBox();
   const [submitting, setSubmitting] = React.useState(false);
   const [previewNumber, setPreviewNumber] = React.useState<number | null>(null);
+  const [tags, setTags] = React.useState<Partial<Record<BoxTagKey, boolean>>>({});
 
   const {
     register,
@@ -49,13 +51,13 @@ export default function NewBoxPage() {
   const onSubmit = async (values: Values) => {
     setSubmitting(true);
     try {
-      const box = await createBox(values, user?.id ?? null);
+      const box = await createBox({ ...values, ...tags }, user?.id ?? null);
       setActiveBox(box.id);
       queryClient.invalidateQueries({ queryKey: ["boxes"] });
       toast.success(`Box ${box.number} created`, {
         description: `Write ${box.number} on this box.`,
       });
-      router.replace(`/box/${box.id}`);
+      router.replace(boxHref(box.id));
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Could not create box");
       setSubmitting(false);
@@ -90,6 +92,11 @@ export default function NewBoxPage() {
           />
           <input type="hidden" {...register("destination_room")} />
           {errors.destination_room && <p className="text-xs text-destructive">{errors.destination_room.message}</p>}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Tags</Label>
+          <BoxTagToggles value={tags} onToggle={(key, on) => setTags((t) => ({ ...t, [key]: on }))} />
         </div>
 
         <div className="flex flex-col gap-2">
