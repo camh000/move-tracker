@@ -2,19 +2,25 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Search, Settings } from "lucide-react";
+import { Home, Search, Settings, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
-  { href: "/", label: "Home", icon: Home, match: (p: string) => p === "/" || p.startsWith("/box") },
+  {
+    href: "/",
+    label: "Boxes",
+    icon: Home,
+    match: (p: string) => p === "/" || p.startsWith("/box") || p.startsWith("/item"),
+  },
   { href: "/search", label: "Search", icon: Search, match: (p: string) => p.startsWith("/search") },
+  { href: "/arrival", label: "Arrival", icon: Truck, match: (p: string) => p.startsWith("/arrival") },
   { href: "/settings", label: "Settings", icon: Settings, match: (p: string) => p.startsWith("/settings") },
 ];
 
 export function BottomNav() {
   const pathname = usePathname();
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 backdrop-blur pb-safe">
+    <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 backdrop-blur pb-safe print:hidden">
       <ul className="mx-auto flex max-w-md items-stretch justify-around">
         {tabs.map(({ href, label, icon: Icon, match }) => {
           const active = match(pathname);

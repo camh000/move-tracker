@@ -1,5 +1,6 @@
 import { db } from "@/lib/db/dexie";
 import { reconcileWithServer } from "@/lib/db/sync";
+import { prunePhotoCache } from "@/lib/utils/photo-url";
 
 export interface CleanupResult {
   /** Local item_photos rows whose parent item is missing or deleted. */
@@ -60,6 +61,9 @@ export async function runCleanup(): Promise<CleanupResult> {
       }
     }
   });
+
+  // Offline copies of photos that no longer exist.
+  result.localPhotos += await prunePhotoCache();
 
   // Server-side Storage orphan scan.
   try {

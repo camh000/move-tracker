@@ -3,19 +3,31 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runSync, primeFromServer } from "@/lib/db/sync";
+import { runSync, primeFromServer, outboxSummary } from "@/lib/db/sync";
+import { offlinePhotosEnabled, prefetchAllPhotos } from "@/lib/utils/photo-url";
 import { createClient } from "@/lib/supabase/client";
 
+interface SyncCounts {
+  lastSyncAt: number | null;
+  /** Local changes not yet on the server (includes failed). */
+  pending: number;
+  /** Changes the server rejected — need a retry/discard decision in Settings. */
+  failed: number;
+}
+
 type SyncStatus =
-  | { kind: "idle"; lastSyncAt: number | null; pending: number }
-  | { kind: "syncing"; lastSyncAt: number | null; pending: number }
-  | { kind: "offline"; lastSyncAt: number | null; pending: number }
-  | { kind: "error"; lastSyncAt: number | null; pending: number; message: string };
+  | ({ kind: "idle" } & SyncCounts)
+  | ({ kind: "syncing" } & SyncCounts)
+  | ({ kind: "offline" } & SyncCounts)
+  | ({ kind: "error"; message: string } & SyncCounts);
 
 interface SyncEngineCtx {
   status: SyncStatus;
   online: boolean;
+  /** Sync now, retrying anything that is waiting on backoff. */
   forceSync: () => Promise<void>;
+  /** Re-download everything from the server, then sync. */
+  repair: () => Promise<void>;
 }
 
 const Ctx = React.createContext<SyncEngineCtx | null>(null);
@@ -26,80 +38,81 @@ export function useSyncEngine() {
   return ctx;
 }
 
+function errorMessage(e: unknown) {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object" && e && "message" in e) return String((e as { message: unknown }).message);
+  return "Sync failed";
+}
+
 export function SyncEngineProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
-  const [online, setOnline] = React.useState(typeof navigator === "undefined" ? true : navigator.onLine);
-  const [pending, setPending] = React.useState(0);
-  const [lastSyncAt, setLastSyncAt] = React.useState<number | null>(null);
+  const [online, setOnline] = React.useState(true);
+  const [counts, setCounts] = React.useState<SyncCounts>({ lastSyncAt: null, pending: 0, failed: 0 });
   const [syncing, setSyncing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const tick = React.useCallback(async () => {
-    if (typeof window === "undefined") return;
-    if (!navigator.onLine) {
-      setOnline(false);
-      return;
-    }
-    setOnline(true);
-    setSyncing(true);
-    setError(null);
-    try {
-      const result = await runSync();
-      setPending(result.pending);
-      setLastSyncAt(result.lastSyncAt);
-      if (result.changed) {
-        await queryClient.invalidateQueries();
+  const tick = React.useCallback(
+    async (opts: { ignoreBackoff?: boolean } = {}) => {
+      if (typeof window === "undefined") return;
+      const { data } = await createClient().auth.getSession();
+      if (!data.session) return;
+      // Show queued changes straight away, not only once a sync finishes.
+      const s = await outboxSummary();
+      setCounts({ lastSyncAt: s.lastSyncAt, pending: s.pending, failed: s.failed });
+      if (!navigator.onLine) {
+        setOnline(false);
+        return;
       }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Sync failed");
+      setOnline(true);
+      setSyncing(true);
+      try {
+        const result = await runSync(opts);
+        setCounts({ lastSyncAt: result.lastSyncAt, pending: result.pending, failed: result.failed });
+        setError(result.retryError);
+        if (result.changed) await queryClient.invalidateQueries();
+        if (offlinePhotosEnabled()) void prefetchAllPhotos();
+      } catch (e: unknown) {
+        setError(errorMessage(e));
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [queryClient],
+  );
+
+  const repair = React.useCallback(async () => {
+    setSyncing(true);
+    try {
+      await primeFromServer();
+      await queryClient.invalidateQueries();
     } finally {
       setSyncing(false);
     }
-  }, [queryClient]);
+    await tick({ ignoreBackoff: true });
+  }, [queryClient, tick]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    let canceled = false;
-    let primedForUser: string | null = null;
-
-    const primeAndSync = async (userId: string) => {
-      if (canceled || primedForUser === userId) return;
-      primedForUser = userId;
-      try {
-        await primeFromServer();
-        // Prime populates Dexie but tick() sees nothing newer than the
-        // freshly stamped last_sync_at, so it won't invalidate queries.
-        // Invalidate explicitly here so room/box lists pick up the seed.
-        await queryClient.invalidateQueries();
-      } catch {
-        // continue — initial pull not critical
-      }
-      if (!canceled) await tick();
-    };
-
     const supabase = createClient();
 
-    // Prime IndexedDB from server on initial mount if user is already signed in
-    void supabase.auth.getUser().then(({ data }) => {
-      if (data.user) void primeAndSync(data.user.id);
-    });
+    // runSync does a full pull on a device's first sync and deltas after that.
+    // Async: tick() sets state after awaiting, not synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void tick();
 
-    // React to sign-in / sign-out happening after mount
-    const { data: authSub } = supabase.auth.onAuthStateChange((event, session) => {
-      if ((event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") && session?.user) {
-        void primeAndSync(session.user.id);
-      } else if (event === "SIGNED_OUT") {
-        primedForUser = null;
-      }
+    const { data: authSub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") void tick();
     });
 
     const onOnline = () => {
       setOnline(true);
-      void tick();
+      void tick({ ignoreBackoff: true });
     };
     const onOffline = () => setOnline(false);
     const onFocus = () => void tick();
-
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
     const onTrigger = () => void tick();
     const onRenumbered = (e: Event) => {
       const detail = (e as CustomEvent<{ from: number; to: number }>).detail;
@@ -107,11 +120,13 @@ export function SyncEngineProvider({ children }: { children: React.ReactNode }) 
         description: "Please update the marking on your box.",
         duration: 12_000,
       });
+      void queryClient.invalidateQueries();
     };
 
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("trigger-sync", onTrigger);
     window.addEventListener("box-renumbered", onRenumbered as EventListener);
 
@@ -120,26 +135,36 @@ export function SyncEngineProvider({ children }: { children: React.ReactNode }) 
     }, 30_000);
 
     return () => {
-      canceled = true;
       authSub.subscription.unsubscribe();
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("trigger-sync", onTrigger);
       window.removeEventListener("box-renumbered", onRenumbered as EventListener);
       window.clearInterval(intervalId);
     };
-  }, [tick]);
+  }, [tick, queryClient]);
+
+  const failedMessage =
+    counts.failed > 0
+      ? `${counts.failed} change${counts.failed === 1 ? "" : "s"} couldn't sync — see Settings`
+      : null;
 
   const status: SyncStatus = !online
-    ? { kind: "offline", lastSyncAt, pending }
+    ? { kind: "offline", ...counts }
     : syncing
-      ? { kind: "syncing", lastSyncAt, pending }
-      : error
-        ? { kind: "error", lastSyncAt, pending, message: error }
-        : { kind: "idle", lastSyncAt, pending };
+      ? { kind: "syncing", ...counts }
+      : failedMessage || error
+        ? { kind: "error", message: (failedMessage ?? error)!, ...counts }
+        : { kind: "idle", ...counts };
 
-  const value: SyncEngineCtx = { status, online, forceSync: tick };
+  const value: SyncEngineCtx = {
+    status,
+    online,
+    forceSync: () => tick({ ignoreBackoff: true }),
+    repair,
+  };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

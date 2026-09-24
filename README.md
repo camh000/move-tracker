@@ -30,10 +30,14 @@ Move Tracker solves the search problem. Anyone with the app can scan an item int
 - **Numbered boxes assigned automatically.** "Will be **Box 12**" appears before you even start so you can grab the marker. Numbers are unique across both users with collision recovery if you ever both create at the same time offline.
 - **Photos compressed on-device.** Every photo is downscaled to ≤0.5 MB before upload. No battery- or data-burning 4 K JPEGs.
 - **Two users, one shared dataset.** Both partners see and edit the same inventory in real-time. RLS keeps everything else out.
-- **Full-text search.** Backed by Postgres `tsvector` online and IndexedDB locally — search "kettle" or "DeLonghi bean-to-cup" and it finds it.
-- **Genuinely offline.** App shell, all reads, and all writes work with no network. Changes queue in an outbox and drain transparently when you're back online.
+- **Instant search, online or off.** Searches the on-device copy of the inventory: partial words ("ket" → Kettle), rooms, box notes, and box numbers ("12" jumps to Box 12).
+- **Genuinely offline.** Every screen is a precached static shell, so any box — even one created offline — opens with no signal. Changes queue in an outbox and drain transparently when you're back online, and the other person's photos are downloaded in the background so they show offline too.
+- **Moving-day tools.** Tag boxes *Open first*, *Fragile*, *Heavy*; tick boxes off an **arrival checklist** as they come off the van (type the number or scan the label); tick items off as you **unpack**, with a per-box progress counter.
+- **Printable QR labels.** Big box number, room and tags, plus a QR code that opens the box in the app.
+- **Export & backup.** One-tap CSV inventory (one row per item — handy for removals insurance) and a full JSON backup, generated on-device.
+- **Move items between boxes** when something ends up somewhere else.
 - **Installable PWA.** Add to Home Screen on iOS or Android and it behaves like a native app — full-screen, splash, app icon.
-- **Last-write-wins conflict resolution** with an in-app explainer so it's not a black box.
+- **Per-field last-write-wins conflict resolution** with an in-app explainer so it's not a black box.
 - **Active box card** at the top of the home screen so you can return to packing in one tap.
 
 ## Screens
@@ -103,7 +107,7 @@ You can do this in ~5 minutes with the included scripts.
    ```bash
    npm install
    vercel env pull .env.local         # fetches the secrets from Vercel
-   node scripts/setup-supabase.mjs    # runs both SQL migrations + creates the storage bucket
+   node scripts/setup-supabase.mjs    # runs the SQL migrations + creates the storage bucket
    node scripts/create-users.mjs      # creates 2 user accounts with strong random passwords (one-shot)
    ```
 4. **In the Supabase dashboard**, go to *Authentication → Sign In / Providers* and toggle **"Allow new users to sign up"** OFF. The CLI can't do this — Supabase requires a Personal Access Token for project-config changes.
@@ -111,6 +115,21 @@ You can do this in ~5 minutes with the included scripts.
 That's it. RLS, triggers, the seeded room list, the private `item-photos` storage bucket, and your two user accounts are all live.
 
 > The first time you run `setup-supabase.mjs` and `create-users.mjs` on this account, save the printed passwords — they're only shown once.
+
+### Upgrading an existing project
+
+Run the migrations again **before** deploying new code. They're idempotent:
+
+```bash
+vercel env pull .env.local
+node scripts/setup-supabase.mjs
+```
+
+`0003_sync_cursor_and_unpacking.sql` makes Postgres stamp `updated_at` on inserts (needed for reliable sync) and adds the box tag / arrival / unpacked columns. The new client depends on them.
+
+### Keeping Supabase awake
+
+Free-tier Supabase projects pause after about a week with no activity. [vercel.json](vercel.json) schedules a daily Vercel cron to [`/api/keepalive`](app/api/keepalive/route.ts), which runs one tiny query. Optionally set a `CRON_SECRET` env var in Vercel so only the cron can call it.
 
 ### 2. Local dev
 
@@ -132,7 +151,13 @@ vercel --prod
 ## How it works
 
 ### Offline-first data layer
-Every read goes to IndexedDB first (instant). Every write is committed to IndexedDB optimistically and queued in an outbox. The sync engine drains the outbox to Supabase whenever the device is online, then runs a delta pull (`updated_at > last_sync_at`) for anything updated by the other user.
+Every read goes to IndexedDB first (instant). Every write is committed to IndexedDB optimistically and queued in an outbox. The sync engine drains the outbox to Supabase whenever the device is online, then runs a delta pull for anything updated by the other user.
+
+- **Cursor.** Postgres stamps `updated_at` on insert *and* update, and the pull cursor is the newest server `updated_at` seen (re-reading a two-minute overlap). Neither phone's clock matters, and rows created offline and uploaded later are never skipped.
+- **Paging.** All pulls page past PostgREST's 1000-row limit.
+- **Deletes.** Deletes don't appear in a delta, so every 5 minutes the client compares id lists and drops local rows the server no longer has.
+- **Failures don't block the queue.** A failing change is retried with exponential backoff; only later changes to the same row (or its children) wait behind it. If the server rejects a change outright (e.g. an item added to a box the other person deleted) it's listed in *Settings → Sync* to retry or discard.
+- **Field-level updates.** Edits send only the changed fields, so if one of you toggles *Fragile* while the other edits notes on the same box, both changes survive.
 
 ```
  user action ──► Dexie (instant, _dirty=1) ──► outbox ──► [online] ──► Supabase
@@ -151,10 +176,10 @@ Box numbers are assigned client-side as `MAX(local box number) + 1`. If two user
 5. On display: `URL.createObjectURL(blob)` while local, signed Storage URL once uploaded.
 
 ### Conflict resolution
-**Last-write-wins on `updated_at`.** Acceptable for a two-user use case — two people rarely edit the same row at the same time — and surfaced in the in-app *Settings → How sync works* explainer.
+**Last-write-wins, per field.** Acceptable for a two-user use case — two people rarely edit the same row at the same time — and surfaced in the in-app *Settings → How sync works* explainer.
 
 ### Auth
-Public signup is disabled in the Supabase dashboard. Both users get full CRUD via a permissive RLS policy. Anonymous users get nothing. The Next.js [proxy.ts](proxy.ts) refreshes the Supabase session cookie on every request and gates non-public routes behind auth.
+Public signup is disabled in the Supabase dashboard. Both users get full CRUD via a permissive RLS policy. Anonymous users get nothing. The Next.js [proxy.ts](proxy.ts) refreshes the Supabase session cookie on every request. Pages are static shells with no data in them, so the sign-in check happens on the client ([auth-gate.tsx](components/auth/auth-gate.tsx)); offline, a stored session is trusted so the app still opens.
 
 ## Project structure
 
@@ -164,11 +189,13 @@ app/
   (app)/                        — auth-gated screens
     page.tsx                    — home (box list)
     box/new/                    — create box
-    box/[id]/                   — box detail
-    box/[id]/add-item/          — packing screen
-    item/[id]/                  — item detail / gallery
+    box/?id=                    — box detail (ids are query params so every page is static)
+    box/add-item/?id=           — packing screen
+    item/?id=                   — item detail / gallery / move
     search/                     — search
-    settings/                   — rooms, sync, sign out
+    arrival/                    — arrival checklist
+    labels/                     — printable QR labels
+    settings/                   — rooms, sync, export, offline photos, sign out
   sw.ts                         — Serwist service worker source
 components/
   ui/                           — shadcn-style primitives
@@ -192,7 +219,7 @@ proxy.ts                        — Next.js auth gate (Next 16 proxy convention)
 
 ## Out of scope (v1)
 
-Item value field, CSV/PDF export, multiple "moves", bulk operations, in-app
+Item value field, PDF export, restore from backup, multiple "moves", bulk operations, in-app
 photo editing, undo / trash, push notifications, "forgot password" flow,
 per-user data isolation, magic-link auth, custom box numbering schemes.
 

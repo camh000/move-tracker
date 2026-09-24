@@ -120,3 +120,15 @@ button, [role="button"], nav {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* Box labels (/labels) */
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+}

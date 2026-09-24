@@ -3,6 +3,8 @@ import { createClient as createBrowserScopedClient } from "@/lib/supabase/server
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
 const STORAGE_BUCKET = "item-photos";
+const LIST_PAGE = 1000;
+const RECENT_UPLOAD_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Removes Storage objects under the calling user's prefix that have no
@@ -29,15 +31,21 @@ export async function POST() {
   });
 
   // Live storage paths from the DB.
-  const { data: photoRows, error: photoErr } = await admin
-    .from("item_photos")
-    .select("storage_path");
-  if (photoErr) {
-    return NextResponse.json({ error: photoErr.message }, { status: 500 });
+  // Page past PostgREST's 1000-row cap — a missed row here would get its
+  // photo deleted as an "orphan".
+  const liveStoragePaths = new Set<string>();
+  for (let from = 0; ; from += LIST_PAGE) {
+    const { data: photoRows, error: photoErr } = await admin
+      .from("item_photos")
+      .select("storage_path")
+      .order("id")
+      .range(from, from + LIST_PAGE - 1);
+    if (photoErr) {
+      return NextResponse.json({ error: photoErr.message }, { status: 500 });
+    }
+    for (const r of photoRows ?? []) if (r.storage_path) liveStoragePaths.add(r.storage_path);
+    if ((photoRows ?? []).length < LIST_PAGE) break;
   }
-  const liveStoragePaths = new Set(
-    (photoRows ?? []).map((r) => r.storage_path).filter((p): p is string => Boolean(p)),
-  );
 
   // Walk the whole bucket — both users share the inventory, so either user
   // is allowed to clean up the other user's uploaded-but-orphaned files.
@@ -70,20 +78,27 @@ async function walkStorage(
   liveStoragePaths: Set<string>,
   orphanedPaths: string[],
 ): Promise<void> {
-  const { data, error } = await admin.storage
-    .from(STORAGE_BUCKET)
-    .list(prefix, { limit: 1000, sortBy: { column: "name", order: "asc" } });
-  if (error) throw error;
-  if (!data) return;
+  // list() returns at most `limit` entries per call — page through them.
+  for (let offset = 0; ; offset += LIST_PAGE) {
+    const { data, error } = await admin.storage
+      .from(STORAGE_BUCKET)
+      .list(prefix, { limit: LIST_PAGE, offset, sortBy: { column: "name", order: "asc" } });
+    if (error) throw error;
+    if (!data?.length) return;
 
-  for (const entry of data) {
-    const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.id === null) {
-      // Folder — recurse.
-      await walkStorage(admin, fullPath, liveStoragePaths, orphanedPaths);
-    } else {
-      // File.
-      if (!liveStoragePaths.has(fullPath)) orphanedPaths.push(fullPath);
+    for (const entry of data) {
+      const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.id === null) {
+        // Folder — recurse.
+        await walkStorage(admin, fullPath, liveStoragePaths, orphanedPaths);
+      } else if (!liveStoragePaths.has(fullPath)) {
+        // A photo is uploaded to Storage just before its DB row is inserted;
+        // leave recent files alone so we never delete one mid-upload.
+        const created = Date.parse(entry.created_at ?? "");
+        if (Number.isFinite(created) && Date.now() - created < RECENT_UPLOAD_GRACE_MS) continue;
+        orphanedPaths.push(fullPath);
+      }
     }
+    if (data.length < LIST_PAGE) return;
   }
 }

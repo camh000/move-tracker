@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { CloudCheck, CloudAlert, CloudOff, Loader2, RefreshCw } from "lucide-react";
 import { useSyncEngine } from "@/components/sync/sync-engine-provider";
 import {
@@ -85,9 +86,15 @@ export function SyncIndicator() {
           <Row label="Pending operations" value={String(status.pending)} />
           <Row label="Last synced" value={lastSyncLabel} />
           {status.kind === "error" && (
-            <Row label="Last error" value={status.message} subdued />
+            <Row label="Problem" value={status.message} subdued />
           )}
         </div>
+
+        {status.pending > 0 && (
+          <Link href="/settings" className="mt-4 block text-sm font-medium text-primary">
+            Review waiting changes in Settings →
+          </Link>
+        )}
 
         <div className="mt-8 flex flex-col gap-3">
           <Button

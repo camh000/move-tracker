@@ -1,6 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+/**
+ * Refreshes the Supabase session cookie. Deliberately does NOT redirect:
+ * pages are static shells that the service worker precaches, and a redirect
+ * here would get cached in place of the page. Auth gating happens in
+ * <AuthGate> on the client; data access is protected by RLS.
+ */
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -25,32 +31,6 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { pathname } = request.nextUrl;
-  const isAuthRoute = pathname === "/login";
-  const isPublicAsset =
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/icons") ||
-    pathname === "/manifest.json" ||
-    pathname === "/favicon.ico" ||
-    pathname === "/sw.js" ||
-    pathname.startsWith("/swe-worker") ||
-    pathname.startsWith("/workbox-");
-
-  if (!user && !isAuthRoute && !isPublicAsset) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
-
-  if (user && isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
-
+  await supabase.auth.getUser();
   return response;
 }

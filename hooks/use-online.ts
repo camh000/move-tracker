@@ -2,18 +2,19 @@
 
 import * as React from "react";
 
+function subscribe(onChange: () => void) {
+  window.addEventListener("online", onChange);
+  window.addEventListener("offline", onChange);
+  return () => {
+    window.removeEventListener("online", onChange);
+    window.removeEventListener("offline", onChange);
+  };
+}
+
 export function useOnline() {
-  const [online, setOnline] = React.useState(true);
-  React.useEffect(() => {
-    setOnline(navigator.onLine);
-    const on = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
-    };
-  }, []);
-  return online;
+  return React.useSyncExternalStore(
+    subscribe,
+    () => navigator.onLine,
+    () => true,
+  );
 }

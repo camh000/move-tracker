@@ -1,20 +1,18 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { AuthGate } from "@/components/auth/auth-gate";
 import { BottomNav } from "@/components/nav/bottom-nav";
 import { TopBar } from "@/components/nav/top-bar";
 
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-
+// Static shell: auth is checked on the client so every screen can be
+// precached and opened offline. Data is only ever read from IndexedDB or
+// Supabase (behind RLS), never rendered on the server.
+export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col">
-      <TopBar />
-      <main className="flex-1 pb-24">{children}</main>
-      <BottomNav />
-    </div>
+    <AuthGate>
+      <div className="flex min-h-svh flex-col">
+        <TopBar />
+        <main className="flex-1 pb-24 print:pb-0">{children}</main>
+        <BottomNav />
+      </div>
+    </AuthGate>
   );
 }

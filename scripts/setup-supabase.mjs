@@ -66,6 +66,11 @@ async function main() {
   try {
     await runSql(client, "0001_init.sql", resolve(root, "supabase/migrations/0001_init.sql"));
     await runSql(client, "0002_storage.sql", resolve(root, "supabase/migrations/0002_storage.sql"));
+    await runSql(
+      client,
+      "0003_sync_cursor_and_unpacking.sql",
+      resolve(root, "supabase/migrations/0003_sync_cursor_and_unpacking.sql"),
+    );
   } finally {
     await client.end();
   }

@@ -6,6 +6,11 @@ export interface BoxRow {
   destination_room: string;
   notes: string | null;
   sealed: boolean;
+  open_first?: boolean;
+  fragile?: boolean;
+  heavy?: boolean;
+  arrived?: boolean;
+  unpacked?: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -18,6 +23,7 @@ export interface ItemRow {
   box_id: string;
   name: string;
   description: string | null;
+  unpacked?: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -31,6 +37,7 @@ export interface ItemPhotoRow {
   storage_path: string | null;
   display_order: number;
   created_at: string;
+  updated_at?: string;
   _local_blob?: Blob | null;
   _dirty?: 0 | 1;
   _deleted?: 0 | 1;
@@ -40,7 +47,15 @@ export interface RoomRow {
   id: string;
   name: string;
   created_at: string;
+  updated_at?: string;
   _dirty?: 0 | 1;
+}
+
+/** Downloaded copies of uploaded photos, so they display offline. */
+export interface PhotoCacheRow {
+  storage_path: string;
+  blob: Blob;
+  cached_at: number;
 }
 
 export type OutboxOp =
@@ -58,6 +73,10 @@ export interface OutboxEntry {
   attempts: number;
   created_at: string;
   last_error?: string;
+  /** Epoch ms before which this entry is not retried (exponential backoff). */
+  next_attempt_at?: number;
+  /** Set when the server rejected the change outright; needs a user decision. */
+  failed?: 0 | 1;
 }
 
 export interface MetaRow {
@@ -72,6 +91,7 @@ class MoveTrackerDB extends Dexie {
   rooms!: Table<RoomRow, string>;
   outbox!: Table<OutboxEntry, number>;
   meta!: Table<MetaRow, string>;
+  photo_cache!: Table<PhotoCacheRow, string>;
 
   constructor() {
     super("movetracker");
@@ -82,6 +102,9 @@ class MoveTrackerDB extends Dexie {
       rooms: "id, &name",
       outbox: "++seq, table, row_id, created_at",
       meta: "key",
+    });
+    this.version(2).stores({
+      photo_cache: "storage_path",
     });
   }
 }
@@ -94,4 +117,10 @@ export function db(): MoveTrackerDB {
   }
   if (!_db) _db = new MoveTrackerDB();
   return _db;
+}
+
+/** Tests only: drop the singleton so the next db() opens a fresh connection. */
+export function __resetDbForTests() {
+  _db?.close();
+  _db = null;
 }
