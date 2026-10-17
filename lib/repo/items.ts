@@ -152,3 +152,8 @@ export async function deletePhoto(photoId: string) {
     payload: { id: photoId, storage_path: photo.storage_path },
   });
 }
+
+/** Every live item's name on this device, for autocomplete. */
+export async function listAllItemNames(): Promise<{ name: string }[]> {
+  return (await db().items.toArray()).filter((i) => i._deleted !== 1).map((i) => ({ name: i.name }));
+}

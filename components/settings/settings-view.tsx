@@ -36,6 +36,7 @@ import {
   prefetchAllPhotos,
   photoCacheStats,
 } from "@/lib/utils/photo-url";
+import { photoSuggestEnabled, setPhotoSuggestEnabled, warmUpPhotoSuggest } from "@/lib/items/photo-suggest";
 import { Switch } from "@/components/ui/switch";
 import { useSyncEngine } from "@/components/sync/sync-engine-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -67,6 +68,7 @@ export function SettingsView() {
   const [cleaning, setCleaning] = React.useState(false);
   const [cleanupResult, setCleanupResult] = React.useState<CleanupResult | null>(null);
   const [offlinePhotos, setOfflinePhotos] = React.useState(true);
+  const [photoSuggest, setPhotoSuggest] = React.useState(true);
   const [photoProgress, setPhotoProgress] = React.useState<{ done: number; total: number } | null>(null);
   const [cachedPhotos, setCachedPhotos] = React.useState<string | null>(null);
   const [repairing, setRepairing] = React.useState(false);
@@ -80,6 +82,7 @@ export function SettingsView() {
     // localStorage is only readable after mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOfflinePhotos(offlinePhotosEnabled());
+    setPhotoSuggest(photoSuggestEnabled());
   }, []);
 
   const refreshStorageStats = React.useCallback(async () => {
@@ -354,6 +357,23 @@ export function SettingsView() {
               if (on) void downloadPhotos();
             }}
             aria-label="Keep photos available offline"
+          />
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border bg-card p-4">
+          <div>
+            <div className="text-sm font-medium">Suggest names from photos</div>
+            <div className="text-xs text-muted-foreground">
+              Recognises common items on this phone, no internet needed. One-off download of about 27 MB.
+            </div>
+          </div>
+          <Switch
+            checked={photoSuggest}
+            onCheckedChange={(on) => {
+              setPhotoSuggest(on);
+              setPhotoSuggestEnabled(on);
+              if (on) warmUpPhotoSuggest();
+            }}
+            aria-label="Suggest names from photos"
           />
         </div>
         <Button className="mt-3 w-full" variant="outline" onClick={downloadPhotos} disabled={!!photoProgress}>

@@ -6,6 +6,9 @@ export async function compressImage(file: File | Blob): Promise<Blob> {
     maxSizeMB: 0.5,
     maxWidthOrHeight: 1600,
     useWebWorker: true,
+    // Served by the app (scripts/fetch-model.mjs); the default CDN URL is blocked by our CSP,
+    // which silently pushed compression onto the main thread.
+    libURL: `${location.origin}/vendor/browser-image-compression.js`,
     fileType: "image/jpeg",
     initialQuality: 0.85,
   });
