@@ -1,4 +1,5 @@
 import { db, type BoxRow, type ItemRow, type ItemPhotoRow } from "@/lib/db/dexie";
+import { MATCH, matchWord, relatedTerms } from "@/lib/search/synonyms";
 
 export interface ItemHit {
   item: ItemRow;
@@ -20,8 +21,11 @@ function tokens(q: string): string[] {
 /**
  * Searches this device's copy of the inventory, which is complete once synced,
  * so results are identical online and offline. Every word must match
- * somewhere (substring, so "ket" finds "Kettle"). Items match on their own
- * name/description plus their box's room and notes; boxes match on number.
+ * somewhere: as typed (substring, so "ket" finds "Kettle"), via a related
+ * word ("puzzle" finds "Jigsaw", see lib/search/synonyms.ts), or, for a word
+ * that finds nothing at all otherwise, allowing a small typo ("kettel").
+ * Items match on their own name/description plus their box's room and
+ * notes; boxes match on number.
  */
 export async function searchInventory(q: string): Promise<SearchResults> {
   const words = tokens(q);
@@ -48,21 +52,34 @@ export async function searchInventory(q: string): Promise<SearchResults> {
     if (!cur || p.display_order < cur.display_order) firstPhoto.set(p.item_id, p);
   }
 
+  const related = words.map((w) => relatedTerms(w));
+  const candidates = items
+    .filter((item) => item._deleted !== 1)
+    .map((item) => {
+      const box = boxById.get(item.box_id);
+      const name = item.name.toLowerCase();
+      const haystack = [name, item.description ?? "", box?.destination_room ?? "", box?.notes ?? ""]
+        .join(" \n ")
+        .toLowerCase();
+      return { item, box, name, haystack, levels: words.map((w, i) => matchWord(w, haystack, related[i])) };
+    });
+
+  // Typo matching only for words nothing matched properly; otherwise "mugs"
+  // would also turn up every "rugs".
+  words.forEach((w, i) => {
+    if (candidates.some((c) => c.levels[i] !== MATCH.none)) return;
+    for (const c of candidates) c.levels[i] = matchWord(w, c.haystack, related[i], true);
+  });
+
   const scored: { hit: ItemHit; score: number }[] = [];
-  for (const item of items) {
-    if (item._deleted === 1) continue;
-    const box = boxById.get(item.box_id);
-    const name = item.name.toLowerCase();
-    const haystack = [name, item.description ?? "", box?.destination_room ?? "", box?.notes ?? ""]
-      .join(" \n ")
-      .toLowerCase();
-    if (!words.every((w) => haystack.includes(w))) continue;
-    // Rank name matches first, then name-prefix matches.
+  for (const { item, box, name, levels } of candidates) {
+    if (levels.some((l) => l === MATCH.none)) continue;
+    // Rank name matches first (as typed, then related, then typo), then name-prefix matches.
     let score = 0;
-    for (const w of words) {
-      if (name.includes(w)) score += 2;
+    words.forEach((w, i) => {
+      score += levels[i] + 2 * matchWord(w, name, related[i], levels[i] === MATCH.typo);
       if (name.startsWith(w)) score += 1;
-    }
+    });
     scored.push({ hit: { item, box, photo: firstPhoto.get(item.id) }, score });
   }
   scored.sort((a, b) => b.score - a.score || a.hit.item.name.localeCompare(b.hit.item.name));
