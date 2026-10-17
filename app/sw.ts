@@ -1,6 +1,6 @@
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import { CacheFirst, CacheableResponsePlugin, Serwist } from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -22,7 +22,21 @@ const serwist = new Serwist({
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [
+    // Self-hosted assets from scripts/fetch-model.mjs: the on-device photo
+    // model and its runtime (~27 MB) and the image compressor's worker script.
+    // Fetch once, then serve from cache so they work offline. Filenames are
+    // fixed, so a model update means a new filename.
+    {
+      matcher: ({ url, sameOrigin }) =>
+        sameOrigin && ["/models/", "/ort/", "/vendor/"].some((p) => url.pathname.startsWith(p)),
+      handler: new CacheFirst({
+        cacheName: "self-hosted-assets",
+        plugins: [new CacheableResponsePlugin({ statuses: [200] })],
+      }),
+    },
+    ...defaultCache,
+  ],
 });
 
 serwist.addEventListeners();

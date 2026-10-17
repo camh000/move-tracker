@@ -57,3 +57,8 @@ next-env.d.ts
 
 .vercel
 .env*.local
+
+# on-device photo model + runtime (scripts/fetch-model.mjs)
+/public/models/mobileclip_s0/
+/public/ort/
+/public/vendor/

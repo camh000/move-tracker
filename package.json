@@ -8,10 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "predev": "node scripts/fetch-model.mjs",
+    "prebuild": "node scripts/fetch-model.mjs",
+    "label-embeddings": "node --experimental-strip-types scripts/build-label-embeddings.mts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
+    "@huggingface/transformers": "^4.3.1",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-label": "^2.1.8",
